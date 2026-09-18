@@ -159,9 +159,6 @@ async function connectAccount(authToken, ct0, index) {
     return null;
   }
 
-  // DEBUG — dump full HTML ke file supaya bisa diperiksa
-  fs.writeFileSync(`debug_twitter_auth_${index}.html`, twitterAuthRes.data);
-  console.log(`[${index}] HTML disimpan ke debug_twitter_auth_${index}.html (${twitterAuthRes.data.length} bytes)`);
 
   const authCode = extractAuthCode(twitterAuthRes.data);
   if (!authCode) {
@@ -236,9 +233,10 @@ async function connectAccount(authToken, ct0, index) {
 // ─── Extract auth_code dari HTML ─────────────────────────────
 function extractAuthCode(html) {
   const patterns = [
-    /"code"\s*:\s*"([^"]+)"/,
+    // Format SSR X.com: authCode:"VALUE"
+    /authCode\s*:\s*"([^"]+)"/,
+    // Fallback format lama
     /name="code"\s+value="([^"]+)"/,
-    /authCode['"]\s*:\s*['"]([^'"]+)['"]/,
     /"auth_code"\s*:\s*"([^"]+)"/,
   ];
   for (const re of patterns) {
