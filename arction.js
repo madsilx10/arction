@@ -160,7 +160,7 @@ async function connectAccount(authToken, ct0, index) {
     url: `https://x.com/i/api/2/oauth2/authorize?${urlObj2.searchParams.toString()}`,
     headers: {
       ...baseHeaders,
-      'Authorization': 'Bearer AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I7BeIg1n0AH8%3DUkinIHmidszmwwXYFERnJpM3giqwFZszY0jokXT7uY',
+      'Authorization': 'Bearer AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA',
       'Cookie': `auth_token=${authToken}; ct0=${ct0}`,
       'X-Csrf-Token': ct0,
       'Accept': 'application/json',
@@ -193,7 +193,7 @@ async function connectAccount(authToken, ct0, index) {
     url: 'https://api.x.com/2/oauth2/authorize',
     headers: {
       ...baseHeaders,
-      'Authorization': 'Bearer AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I7BeIg1n0AH8%3DUkinIHmidszmwwXYFERnJpM3giqwFZszY0jokXT7uY',
+      'Authorization': 'Bearer AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA',
       'Cookie': `auth_token=${authToken}; ct0=${ct0}`,
       'Content-Type': 'application/x-www-form-urlencoded',
       'Content-Length': Buffer.byteLength(postBody),
