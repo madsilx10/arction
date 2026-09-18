@@ -153,34 +153,34 @@ async function connectAccount(authToken, ct0, index) {
   console.log(`[${index}] State: ${urlObj.searchParams.get('state')}`);
   console.log(`[${index}] X Auth URL: ${xAuthUrl.slice(0, 80)}...`);
 
-  // ── Step 2: GET Twitter authorize ───────────────────────────
-  console.log(`[${index}] Step 2: GET Twitter authorize page...`);
+  // ── Step 2: GET Twitter authorize (JSON) ────────────────────
+  console.log(`[${index}] Step 2: GET Twitter authorize (JSON)...`);
+  const urlObj2 = new URL(xAuthUrl);
   const twitterAuthRes = await request({
-    url: xAuthUrl,
+    url: `https://x.com/i/api/2/oauth2/authorize?${urlObj2.searchParams.toString()}`,
     headers: {
       ...baseHeaders,
+      'Authorization': 'Bearer AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I7BeIg1n0AH8%3DUkinIHmidszmwwXYFERnJpM3giqwFZszY0jokXT7uY',
       'Cookie': `auth_token=${authToken}; ct0=${ct0}`,
-      'Sec-Fetch-Dest': 'document', 'Sec-Fetch-Mode': 'navigate', 'Sec-Fetch-Site': 'cross-site',
+      'X-Csrf-Token': ct0,
+      'Accept': 'application/json',
+      'X-Twitter-Active-User': 'yes',
+      'X-Twitter-Client-Language': 'en',
+      'Sec-Fetch-Dest': 'empty', 'Sec-Fetch-Mode': 'cors', 'Sec-Fetch-Site': 'same-origin',
     },
-    followRedirects: true,
   });
 
   if (twitterAuthRes.status !== 200) {
-    console.error(`[${index}] Twitter authorize gagal: ${twitterAuthRes.status}`);
+    console.error(`[${index}] Twitter authorize gagal: ${twitterAuthRes.status}`, twitterAuthRes.data);
     return null;
   }
 
+  let twitterAuthJson;
+  try { twitterAuthJson = JSON.parse(twitterAuthRes.data); } catch { twitterAuthJson = {}; }
 
-  // Capture cookies yg di-set Twitter selama Step 2 (ct0 bisa diupdate)
-  let twitterCookies = { auth_token: authToken, ct0 };
-  twitterCookies = mergeCookies(twitterCookies, parseCookies(twitterAuthRes.setCookies));
-  const activeCt0 = twitterCookies['ct0'] || ct0;
-  console.log(`[${index}] Active ct0: ${activeCt0.slice(0, 20)}...`);
-
-  const authCode = extractAuthCode(twitterAuthRes.data);
+  const authCode = twitterAuthJson.auth_code;
   if (!authCode) {
-    console.error(`[${index}] Gagal extract auth_code dari Twitter authorize page`);
-    console.error(`[${index}] HTML snippet:`, twitterAuthRes.data.slice(0, 800));
+    console.error(`[${index}] Gagal dapat auth_code. Response:`, twitterAuthRes.data.slice(0, 500));
     return null;
   }
   console.log(`[${index}] Auth code: ${authCode.slice(0, 20)}...`);
@@ -190,14 +190,14 @@ async function connectAccount(authToken, ct0, index) {
   const postBody = new URLSearchParams({ approval: 'true', code: authCode, consent_flow: 'web_consent' }).toString();
   const approveRes = await request({
     method: 'POST',
-    url: 'https://x.com/i/api/2/oauth2/authorize',
+    url: 'https://api.x.com/2/oauth2/authorize',
     headers: {
       ...baseHeaders,
       'Authorization': 'Bearer AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I7BeIg1n0AH8%3DUkinIHmidszmwwXYFERnJpM3giqwFZszY0jokXT7uY',
-      'Cookie': serializeCookies(twitterCookies),
+      'Cookie': `auth_token=${authToken}; ct0=${ct0}`,
       'Content-Type': 'application/x-www-form-urlencoded',
       'Content-Length': Buffer.byteLength(postBody),
-      'X-Csrf-Token': activeCt0,
+      'X-Csrf-Token': ct0,
       'X-Twitter-Active-User': 'yes',
       'X-Twitter-Client-Language': 'en',
       'Origin': 'https://x.com',
@@ -250,25 +250,6 @@ async function connectAccount(authToken, ct0, index) {
   return null;
 }
 
-// ─── Extract auth_code dari HTML ─────────────────────────────
-function extractAuthCode(html) {
-  const patterns = [
-    // Format SSR X.com terbaru: authCode:\\"VALUE\\" (escaped dalam JS string)
-    /authCode[^"]*\\"([^\\]+)\\"/,
-    // Format unescaped
-    /authCode\s*:\s*"([^"]+)"/,
-    // Format JSON
-    /"authCode"\s*:\s*"([^"]+)"/,
-    // Fallback format lama
-    /name="code"\s+value="([^"]+)"/,
-    /"auth_code"\s*:\s*"([^"]+)"/,
-  ];
-  for (const re of patterns) {
-    const m = html.match(re);
-    if (m) return m[1];
-  }
-  return null;
-}
 
 // ─── Main ────────────────────────────────────────────────────
 async function main() {
