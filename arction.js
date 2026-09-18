@@ -163,6 +163,7 @@ async function connectAccount(authToken, ct0, index) {
   const authCode = extractAuthCode(twitterAuthRes.data);
   if (!authCode) {
     console.error(`[${index}] Gagal extract auth_code dari Twitter authorize page`);
+    console.error(`[${index}] HTML snippet:`, twitterAuthRes.data.slice(0, 800));
     return null;
   }
   console.log(`[${index}] Auth code: ${authCode.slice(0, 20)}...`);
@@ -175,11 +176,13 @@ async function connectAccount(authToken, ct0, index) {
     url: 'https://api.x.com/2/oauth2/authorize',
     headers: {
       ...baseHeaders,
-      'Authorization': 'Bearer AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+      'Authorization': 'Bearer AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I7BeIg1n0AH8%3DUkinIHmidszmwwXYFERnJpM3giqwFZszY0jokXT7uY',
       'Cookie': `auth_token=${authToken}; ct0=${ct0}`,
       'Content-Type': 'application/x-www-form-urlencoded',
       'Content-Length': Buffer.byteLength(postBody),
       'X-Csrf-Token': ct0,
+      'X-Twitter-Active-User': 'yes',
+      'X-Twitter-Client-Language': 'en',
       'Origin': 'https://x.com',
       'Referer': 'https://x.com/',
       'Sec-Fetch-Dest': 'empty', 'Sec-Fetch-Mode': 'cors', 'Sec-Fetch-Site': 'same-site',
