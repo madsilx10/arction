@@ -159,24 +159,9 @@ async function connectAccount(authToken, ct0, index) {
     return null;
   }
 
-  // DEBUG — hapus setelah auth_code ketemu
-  console.log(`[${index}] Twitter authorize status: ${twitterAuthRes.status}`);
-  // Cari __NEXT_DATA__ atau state JSON yang embed auth code
-  const nextDataMatch = twitterAuthRes.data.match(/<script[^>]*id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/);
-  if (nextDataMatch) {
-    console.log(`[${index}] __NEXT_DATA__ (500 char):`, nextDataMatch[1].slice(0, 500));
-  } else {
-    console.log(`[${index}] Tidak ada __NEXT_DATA__`);
-  }
-  // Cari semua inline script yang mengandung kata "code" atau "oauth"
-  const scriptMatches = [...twitterAuthRes.data.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)];
-  for (const sm of scriptMatches) {
-    if (/oauth_token|auth_code|"code"|authorizationCode/i.test(sm[1])) {
-      console.log(`[${index}] Script mengandung code:\n${sm[1].slice(0, 800)}\n---`);
-    }
-  }
-  // Dump 500 char dari akhir HTML (kadang state ada di sini)
-  console.log(`[${index}] HTML tail:\n${twitterAuthRes.data.slice(-500)}\n---`);
+  // DEBUG — dump full HTML ke file supaya bisa diperiksa
+  fs.writeFileSync(`debug_twitter_auth_${index}.html`, twitterAuthRes.data);
+  console.log(`[${index}] HTML disimpan ke debug_twitter_auth_${index}.html (${twitterAuthRes.data.length} bytes)`);
 
   const authCode = extractAuthCode(twitterAuthRes.data);
   if (!authCode) {
