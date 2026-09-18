@@ -36,29 +36,55 @@ function serializeCookies(jar) {
 }
 
 // ─── HTTP helper ─────────────────────────────────────────────
-function request({ method = 'GET', url, headers = {}, body = null }) {
+function request({ method = 'GET', url, headers = {}, body = null, followRedirects = false, maxRedirects = 10 }) {
   return new Promise((resolve, reject) => {
-    const u = new URL(url);
-    const options = {
-      hostname: u.hostname,
-      path: u.pathname + u.search,
-      method,
-      headers,
-    };
-    const req = https.request(options, res => {
-      let data = '';
-      res.on('data', chunk => data += chunk);
-      res.on('end', () => resolve({
-        status: res.statusCode,
-        headers: res.headers,
-        // set-cookie bisa array atau string
-        setCookies: [].concat(res.headers['set-cookie'] || []),
-        data,
-      }));
-    });
-    req.on('error', reject);
-    if (body) req.write(body);
-    req.end();
+    let redirectCount = 0;
+    let allSetCookies = [];
+
+    function doRequest(currentUrl, currentMethod, currentBody) {
+      const u = new URL(currentUrl);
+      const options = {
+        hostname: u.hostname,
+        path: u.pathname + u.search,
+        method: currentMethod,
+        headers,
+      };
+      const req = https.request(options, res => {
+        // Kumpulkan semua set-cookie dari semua hop
+        allSetCookies = allSetCookies.concat([].concat(res.headers['set-cookie'] || []));
+
+        const isRedirect = [301, 302, 303, 307, 308].includes(res.statusCode);
+        if (followRedirects && isRedirect && res.headers['location'] && redirectCount < maxRedirects) {
+          redirectCount++;
+          let nextUrl = res.headers['location'];
+          // Resolve relative redirect
+          if (nextUrl.startsWith('/')) {
+            nextUrl = `${u.protocol}//${u.hostname}${nextUrl}`;
+          }
+          // 303 dan 301/302 pada non-GET → switch ke GET tanpa body
+          const nextMethod = (res.statusCode === 303 || ([301, 302].includes(res.statusCode) && currentMethod !== 'GET'))
+            ? 'GET' : currentMethod;
+          const nextBody = nextMethod === 'GET' ? null : currentBody;
+          // Baca dan buang body response sebelum redirect
+          res.resume();
+          doRequest(nextUrl, nextMethod, nextBody);
+        } else {
+          let data = '';
+          res.on('data', chunk => data += chunk);
+          res.on('end', () => resolve({
+            status: res.statusCode,
+            headers: res.headers,
+            setCookies: allSetCookies,
+            data,
+          }));
+        }
+      });
+      req.on('error', reject);
+      if (currentBody) req.write(currentBody);
+      req.end();
+    }
+
+    doRequest(url, method, body);
   });
 }
 
@@ -125,6 +151,7 @@ async function connectAccount(authToken, ct0, index) {
       'Cookie': `auth_token=${authToken}; ct0=${ct0}`,
       'Sec-Fetch-Dest': 'document', 'Sec-Fetch-Mode': 'navigate', 'Sec-Fetch-Site': 'cross-site',
     },
+    followRedirects: true,
   });
 
   if (twitterAuthRes.status !== 200) {
