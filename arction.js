@@ -160,6 +160,12 @@ async function connectAccount(authToken, ct0, index) {
   }
 
 
+  // Capture cookies yg di-set Twitter selama Step 2 (ct0 bisa diupdate)
+  let twitterCookies = { auth_token: authToken, ct0 };
+  twitterCookies = mergeCookies(twitterCookies, parseCookies(twitterAuthRes.setCookies));
+  const activeCt0 = twitterCookies['ct0'] || ct0;
+  console.log(`[${index}] Active ct0: ${activeCt0.slice(0, 20)}...`);
+
   const authCode = extractAuthCode(twitterAuthRes.data);
   if (!authCode) {
     console.error(`[${index}] Gagal extract auth_code dari Twitter authorize page`);
@@ -177,10 +183,10 @@ async function connectAccount(authToken, ct0, index) {
     headers: {
       ...baseHeaders,
       'Authorization': 'Bearer AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I7BeIg1n0AH8%3DUkinIHmidszmwwXYFERnJpM3giqwFZszY0jokXT7uY',
-      'Cookie': `auth_token=${authToken}; ct0=${ct0}`,
+      'Cookie': serializeCookies(twitterCookies),
       'Content-Type': 'application/x-www-form-urlencoded',
       'Content-Length': Buffer.byteLength(postBody),
-      'X-Csrf-Token': ct0,
+      'X-Csrf-Token': activeCt0,
       'X-Twitter-Active-User': 'yes',
       'X-Twitter-Client-Language': 'en',
       'Origin': 'https://x.com',
