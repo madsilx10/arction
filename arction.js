@@ -1,29 +1,10 @@
-const axios = require('axios');
+const https = require('https');
 const crypto = require('crypto');
-const { CookieJar } = require('tough-cookie');
-const { wrapper } = require('axios-cookiejar-support');
 const fs = require('fs');
 const readline = require('readline');
 
-// ─── PKCE helpers ───────────────────────────────────────────
-function generateCodeVerifier() {
-  return crypto.randomBytes(32).toString('base64url');
-}
-
-function generateCodeChallenge(verifier) {
-  return crypto.createHash('sha256').update(verifier).digest('base64url');
-}
-
-function generateState() {
-  return crypto.randomBytes(20).toString('hex');
-}
-
 // ─── Config ─────────────────────────────────────────────────
-const CLIENT_ID     = 'UmdmeFYtbVlsSkJIUjhVQWRWZXo6MTpjaQ';
-const REDIRECT_URI  = 'https://arction.app/oauth/x_callback';
-const SCOPE         = 'tweet.read users.read offline.access';
 const REF_URL       = 'https://arction.app/ref/E6DB3659';
-
 const ACCOUNTS_FILE = 'akun.txt';
 
 // ─── Prompt helper ──────────────────────────────────────────
@@ -32,15 +13,59 @@ function prompt(question) {
   return new Promise(resolve => rl.question(question, ans => { rl.close(); resolve(ans.trim()); }));
 }
 
+// ─── Cookie store (per domain) ──────────────────────────────
+function parseCookies(setCookieHeaders) {
+  const jar = {};
+  for (const header of (setCookieHeaders || [])) {
+    const [pair] = header.split(';');
+    const idx = pair.indexOf('=');
+    if (idx < 0) continue;
+    const key = pair.slice(0, idx).trim();
+    const val = pair.slice(idx + 1).trim();
+    jar[key] = val;
+  }
+  return jar;
+}
+
+function mergeCookies(existing, incoming) {
+  return { ...existing, ...incoming };
+}
+
+function serializeCookies(jar) {
+  return Object.entries(jar).map(([k, v]) => `${k}=${v}`).join('; ');
+}
+
+// ─── HTTP helper ─────────────────────────────────────────────
+function request({ method = 'GET', url, headers = {}, body = null }) {
+  return new Promise((resolve, reject) => {
+    const u = new URL(url);
+    const options = {
+      hostname: u.hostname,
+      path: u.pathname + u.search,
+      method,
+      headers,
+    };
+    const req = https.request(options, res => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => resolve({
+        status: res.statusCode,
+        headers: res.headers,
+        // set-cookie bisa array atau string
+        setCookies: [].concat(res.headers['set-cookie'] || []),
+        data,
+      }));
+    });
+    req.on('error', reject);
+    if (body) req.write(body);
+    req.end();
+  });
+}
+
 // ─── Per-account connect ─────────────────────────────────────
 async function connectAccount(authToken, ct0, index) {
-  const jar = new CookieJar();
-  const client = wrapper(axios.create({
-    jar,
-    withCredentials: true,
-    maxRedirects: 0,
-    validateStatus: () => true,
-  }));
+  // Cookie store per domain
+  let arctionCookies = {};
 
   const baseHeaders = {
     'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36',
@@ -50,36 +75,36 @@ async function connectAccount(authToken, ct0, index) {
     'Sec-Ch-Ua-Platform': '"Android"',
   };
 
+  // ── Step 0: Visit ref URL ────────────────────────────────────
   console.log(`[${index}] Step 0: Visit ref link...`);
-  await client.get(REF_URL, {
-    headers: {
-      ...baseHeaders,
-      'Sec-Fetch-Dest': 'document',
-      'Sec-Fetch-Mode': 'navigate',
-      'Sec-Fetch-Site': 'none',
-      'Upgrade-Insecure-Requests': '1',
-    },
+  const refRes = await request({
+    url: REF_URL,
+    headers: { ...baseHeaders, 'Sec-Fetch-Dest': 'document', 'Sec-Fetch-Mode': 'navigate', 'Sec-Fetch-Site': 'none' },
   });
+  arctionCookies = mergeCookies(arctionCookies, parseCookies(refRes.setCookies));
 
+  // ── Step 1: GET arction login ────────────────────────────────
   console.log(`[${index}] Step 1: GET arction login...`);
-  const loginRes = await client.get('https://arction.app/login?go=1&next=%2Fdashboard', {
+  const loginRes = await request({
+    url: 'https://arction.app/login?go=1&next=%2Fdashboard',
     headers: {
       ...baseHeaders,
-      'Sec-Fetch-Dest': 'document',
-      'Sec-Fetch-Mode': 'navigate',
-      'Sec-Fetch-Site': 'none',
-      'Upgrade-Insecure-Requests': '1',
+      'Cookie': serializeCookies(arctionCookies),
+      'Sec-Fetch-Dest': 'document', 'Sec-Fetch-Mode': 'navigate', 'Sec-Fetch-Site': 'none',
     },
   });
+  arctionCookies = mergeCookies(arctionCookies, parseCookies(loginRes.setCookies));
 
   let xAuthUrl = loginRes.headers['location'];
-  if (!xAuthUrl || !xAuthUrl.includes('twitter.com')) {
-    if (loginRes.headers['location']) {
-      const step1b = await client.get(`https://arction.app${loginRes.headers['location']}`, {
-        headers: { ...baseHeaders, 'Sec-Fetch-Site': 'same-origin' },
-      });
-      xAuthUrl = step1b.headers['location'];
-    }
+
+  // Follow sekali lagi kalau masih relative
+  if (xAuthUrl && !xAuthUrl.includes('twitter.com') && xAuthUrl.startsWith('/')) {
+    const step1b = await request({
+      url: `https://arction.app${xAuthUrl}`,
+      headers: { ...baseHeaders, 'Cookie': serializeCookies(arctionCookies), 'Sec-Fetch-Site': 'same-origin' },
+    });
+    arctionCookies = mergeCookies(arctionCookies, parseCookies(step1b.setCookies));
+    xAuthUrl = step1b.headers['location'];
   }
 
   if (!xAuthUrl || !xAuthUrl.includes('twitter.com')) {
@@ -88,63 +113,59 @@ async function connectAccount(authToken, ct0, index) {
   }
 
   const urlObj = new URL(xAuthUrl);
-  const state          = urlObj.searchParams.get('state');
-  const codeChallenge  = urlObj.searchParams.get('code_challenge');
-  console.log(`[${index}] State: ${state}`);
+  console.log(`[${index}] State: ${urlObj.searchParams.get('state')}`);
   console.log(`[${index}] X Auth URL: ${xAuthUrl.slice(0, 80)}...`);
 
+  // ── Step 2: GET Twitter authorize ───────────────────────────
   console.log(`[${index}] Step 2: GET Twitter authorize page...`);
-  const twitterHeaders = {
-    ...baseHeaders,
-    'Cookie': `auth_token=${authToken}; ct0=${ct0}`,
-    'Sec-Fetch-Dest': 'document',
-    'Sec-Fetch-Mode': 'navigate',
-    'Sec-Fetch-Site': 'cross-site',
-    'Upgrade-Insecure-Requests': '1',
-  };
+  const twitterAuthRes = await request({
+    url: xAuthUrl,
+    headers: {
+      ...baseHeaders,
+      'Cookie': `auth_token=${authToken}; ct0=${ct0}`,
+      'Sec-Fetch-Dest': 'document', 'Sec-Fetch-Mode': 'navigate', 'Sec-Fetch-Site': 'cross-site',
+    },
+  });
 
-  const twitterAuthRes = await client.get(xAuthUrl, { headers: twitterHeaders });
   if (twitterAuthRes.status !== 200) {
     console.error(`[${index}] Twitter authorize gagal: ${twitterAuthRes.status}`);
     return null;
   }
 
-  let authCode = extractAuthCode(twitterAuthRes.data);
+  const authCode = extractAuthCode(twitterAuthRes.data);
   if (!authCode) {
     console.error(`[${index}] Gagal extract auth_code dari Twitter authorize page`);
     return null;
   }
-  console.log(`[${index}] Auth code (twitter internal): ${authCode.slice(0, 20)}...`);
+  console.log(`[${index}] Auth code: ${authCode.slice(0, 20)}...`);
 
+  // ── Step 3: POST Twitter approve ────────────────────────────
   console.log(`[${index}] Step 3: POST Twitter approve...`);
-  const approveRes = await client.post('https://api.x.com/2/oauth2/authorize', 
-    new URLSearchParams({
-      approval: 'true',
-      code: authCode,
-      consent_flow: 'web_consent',
-    }).toString(),
-    {
-      headers: {
-        ...baseHeaders,
-        'Authorization': `Bearer AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA`,
-        'Cookie': `auth_token=${authToken}; ct0=${ct0}`,
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'X-Csrf-Token': ct0,
-        'Origin': 'https://x.com',
-        'Referer': 'https://x.com/',
-        'Sec-Fetch-Dest': 'empty',
-        'Sec-Fetch-Mode': 'cors',
-        'Sec-Fetch-Site': 'same-site',
-      },
-    }
-  );
+  const postBody = new URLSearchParams({ approval: 'true', code: authCode, consent_flow: 'web_consent' }).toString();
+  const approveRes = await request({
+    method: 'POST',
+    url: 'https://api.x.com/2/oauth2/authorize',
+    headers: {
+      ...baseHeaders,
+      'Authorization': 'Bearer AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+      'Cookie': `auth_token=${authToken}; ct0=${ct0}`,
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'Content-Length': Buffer.byteLength(postBody),
+      'X-Csrf-Token': ct0,
+      'Origin': 'https://x.com',
+      'Referer': 'https://x.com/',
+      'Sec-Fetch-Dest': 'empty', 'Sec-Fetch-Mode': 'cors', 'Sec-Fetch-Site': 'same-site',
+    },
+    body: postBody,
+  });
 
   if (approveRes.status !== 200) {
     console.error(`[${index}] Approve gagal: ${approveRes.status}`, approveRes.data);
     return null;
   }
 
-  const approveData = approveRes.data;
+  let approveData;
+  try { approveData = JSON.parse(approveRes.data); } catch { approveData = {}; }
   console.log(`[${index}] Approve response:`, JSON.stringify(approveData).slice(0, 200));
 
   const callbackUrl = approveData.redirect_uri || approveData.redirectUri;
@@ -153,26 +174,27 @@ async function connectAccount(authToken, ct0, index) {
     return null;
   }
 
+  // ── Step 4: GET Arction callback ─────────────────────────────
   console.log(`[${index}] Step 4: GET Arction callback...`);
-  const callbackRes = await client.get(callbackUrl, {
+  const callbackRes = await request({
+    url: callbackUrl,
     headers: {
       ...baseHeaders,
-      'Sec-Fetch-Dest': 'document',
-      'Sec-Fetch-Mode': 'navigate',
-      'Sec-Fetch-Site': 'cross-site',
+      'Cookie': serializeCookies(arctionCookies),
+      'Sec-Fetch-Dest': 'document', 'Sec-Fetch-Mode': 'navigate', 'Sec-Fetch-Site': 'cross-site',
       'Referer': 'https://x.com/',
     },
   });
+  arctionCookies = mergeCookies(arctionCookies, parseCookies(callbackRes.setCookies));
 
   const finalLocation = callbackRes.headers['location'];
   console.log(`[${index}] Callback status: ${callbackRes.status}, Location: ${finalLocation}`);
 
   if (callbackRes.status === 302 && finalLocation === '/dashboard') {
-    const cookies = await jar.getCookies('https://arction.app');
-    const cnSession = cookies.find(c => c.key === 'cn_session');
+    const cnSession = arctionCookies['cn_session'];
     if (cnSession) {
-      console.log(`[${index}] ✅ Berhasil! cn_session: ${cnSession.value.slice(0, 30)}...`);
-      return { authToken, cn_session: cnSession.value };
+      console.log(`[${index}] ✅ Berhasil! cn_session: ${cnSession.slice(0, 30)}...`);
+      return { authToken, cn_session: cnSession };
     }
   }
 
@@ -180,7 +202,7 @@ async function connectAccount(authToken, ct0, index) {
   return null;
 }
 
-// ─── Extract twitter internal auth_code dari HTML ─────────────
+// ─── Extract auth_code dari HTML ─────────────────────────────
 function extractAuthCode(html) {
   const patterns = [
     /"code"\s*:\s*"([^"]+)"/,
@@ -195,7 +217,7 @@ function extractAuthCode(html) {
   return null;
 }
 
-// ─── Main ───────────────────────────────────────────────────
+// ─── Main ────────────────────────────────────────────────────
 async function main() {
   if (!fs.existsSync(ACCOUNTS_FILE)) {
     console.error(`File ${ACCOUNTS_FILE} tidak ditemukan!`);
@@ -203,53 +225,34 @@ async function main() {
   }
 
   const lines = fs.readFileSync(ACCOUNTS_FILE, 'utf-8')
-    .split('\n')
-    .map(l => l.trim())
-    .filter(l => l && !l.startsWith('#'));
+    .split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#'));
 
   const accounts = [];
   for (let i = 0; i < lines.length; i += 2) {
-    if (lines[i] && lines[i + 1]) {
-      accounts.push({ authToken: lines[i], ct0: lines[i + 1] });
-    }
+    if (lines[i] && lines[i + 1]) accounts.push({ authToken: lines[i], ct0: lines[i + 1] });
   }
 
   console.log(`Total akun terbaca: ${accounts.length}`);
-  console.log('');
-  console.log('Pilih mode:');
+  console.log('\nPilih mode:');
   console.log('  1 → Jalankan 1 akun (pilih nomor)');
   console.log('  2 → Semua akun');
-  console.log('  3 → Dari akun ke-X sampai akhir');
-  console.log('');
+  console.log('  3 → Dari akun ke-X sampai akhir\n');
 
   const mode = await prompt('Mode [1/2/3]: ');
-
   let selected = [];
 
   if (mode === '1') {
-    const input = await prompt(`Nomor akun (1–${accounts.length}): `);
-    const n = parseInt(input);
-    if (isNaN(n) || n < 1 || n > accounts.length) {
-      console.error('Nomor tidak valid, keluar.');
-      process.exit(1);
-    }
+    const n = parseInt(await prompt(`Nomor akun (1–${accounts.length}): `));
+    if (isNaN(n) || n < 1 || n > accounts.length) { console.error('Nomor tidak valid.'); process.exit(1); }
     selected = [{ ...accounts[n - 1], displayIndex: n }];
-
   } else if (mode === '2') {
     selected = accounts.map((a, i) => ({ ...a, displayIndex: i + 1 }));
-
   } else if (mode === '3') {
-    const input = await prompt(`Mulai dari akun ke- (1–${accounts.length}): `);
-    const from = parseInt(input);
-    if (isNaN(from) || from < 1 || from > accounts.length) {
-      console.error('Nomor tidak valid, keluar.');
-      process.exit(1);
-    }
+    const from = parseInt(await prompt(`Mulai dari akun ke- (1–${accounts.length}): `));
+    if (isNaN(from) || from < 1 || from > accounts.length) { console.error('Nomor tidak valid.'); process.exit(1); }
     selected = accounts.slice(from - 1).map((a, i) => ({ ...a, displayIndex: from + i }));
-
   } else {
-    console.error('Pilihan tidak valid, keluar.');
-    process.exit(1);
+    console.error('Pilihan tidak valid.'); process.exit(1);
   }
 
   console.log(`\nMenjalankan ${selected.length} akun...\n`);
@@ -272,5 +275,4 @@ async function main() {
 }
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
-
 main().catch(console.error);
