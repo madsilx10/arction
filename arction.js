@@ -253,8 +253,12 @@ async function connectAccount(authToken, ct0, index) {
 // ─── Extract auth_code dari HTML ─────────────────────────────
 function extractAuthCode(html) {
   const patterns = [
-    // Format SSR X.com: authCode:"VALUE"
+    // Format SSR X.com terbaru: authCode:\\"VALUE\\" (escaped dalam JS string)
+    /authCode[^"]*\\"([^\\]+)\\"/,
+    // Format unescaped
     /authCode\s*:\s*"([^"]+)"/,
+    // Format JSON
+    /"authCode"\s*:\s*"([^"]+)"/,
     // Fallback format lama
     /name="code"\s+value="([^"]+)"/,
     /"auth_code"\s*:\s*"([^"]+)"/,
