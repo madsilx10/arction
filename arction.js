@@ -3,6 +3,7 @@ const crypto = require('crypto');
 const { CookieJar } = require('tough-cookie');
 const { wrapper } = require('axios-cookiejar-support');
 const fs = require('fs');
+const readline = require('readline');
 
 // ─── PKCE helpers ───────────────────────────────────────────
 function generateCodeVerifier() {
@@ -23,9 +24,13 @@ const REDIRECT_URI  = 'https://arction.app/oauth/x_callback';
 const SCOPE         = 'tweet.read users.read offline.access';
 const REF_URL       = 'https://arction.app/ref/E6DB3659';
 
-// Load accounts dari akun.txt
-// Format: authtoken (baris ganjil), ct0 (baris genap), pisah antar akun boleh baris kosong
 const ACCOUNTS_FILE = 'akun.txt';
+
+// ─── Prompt helper ──────────────────────────────────────────
+function prompt(question) {
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  return new Promise(resolve => rl.question(question, ans => { rl.close(); resolve(ans.trim()); }));
+}
 
 // ─── Per-account connect ─────────────────────────────────────
 async function connectAccount(authToken, ct0, index) {
@@ -33,7 +38,7 @@ async function connectAccount(authToken, ct0, index) {
   const client = wrapper(axios.create({
     jar,
     withCredentials: true,
-    maxRedirects: 0,       // handle redirect manual
+    maxRedirects: 0,
     validateStatus: () => true,
   }));
 
@@ -45,7 +50,6 @@ async function connectAccount(authToken, ct0, index) {
     'Sec-Ch-Ua-Platform': '"Android"',
   };
 
-  // ── Step 0: Visit ref URL dulu biar cn_ref cookie ke-set ──────────────────
   console.log(`[${index}] Step 0: Visit ref link...`);
   await client.get(REF_URL, {
     headers: {
@@ -57,7 +61,6 @@ async function connectAccount(authToken, ct0, index) {
     },
   });
 
-  // ── Step 1: GET arction.app/login → dapat cn_ref cookie & redirect ke X ──
   console.log(`[${index}] Step 1: GET arction login...`);
   const loginRes = await client.get('https://arction.app/login?go=1&next=%2Fdashboard', {
     headers: {
@@ -69,11 +72,8 @@ async function connectAccount(authToken, ct0, index) {
     },
   });
 
-  // Arction redirect ke /login?go=1&next=/dashboard dulu (302)
-  // lalu redirect ke twitter oauth — ambil Location dari header
   let xAuthUrl = loginRes.headers['location'];
   if (!xAuthUrl || !xAuthUrl.includes('twitter.com')) {
-    // Mungkin butuh follow sekali lagi
     if (loginRes.headers['location']) {
       const step1b = await client.get(`https://arction.app${loginRes.headers['location']}`, {
         headers: { ...baseHeaders, 'Sec-Fetch-Site': 'same-origin' },
@@ -87,14 +87,12 @@ async function connectAccount(authToken, ct0, index) {
     return null;
   }
 
-  // Parse state & code_challenge dari URL arction (sudah di-generate server-side)
   const urlObj = new URL(xAuthUrl);
   const state          = urlObj.searchParams.get('state');
   const codeChallenge  = urlObj.searchParams.get('code_challenge');
   console.log(`[${index}] State: ${state}`);
   console.log(`[${index}] X Auth URL: ${xAuthUrl.slice(0, 80)}...`);
 
-  // ── Step 2: GET twitter.com/i/oauth2/authorize ──────────────
   console.log(`[${index}] Step 2: GET Twitter authorize page...`);
   const twitterHeaders = {
     ...baseHeaders,
@@ -111,14 +109,6 @@ async function connectAccount(authToken, ct0, index) {
     return null;
   }
 
-  // ── Step 3: POST /2/oauth2/authorize — approve ──────────────
-  // Butuh ambil authenticity_token dari page HTML, tapi arction pakai PKCE flow
-  // di mana approval langsung via POST API (bukan form submit biasa)
-  // Dari screenshot: POST https://api.x.com/2/oauth2/authorize
-  // dengan bearer token X + payload: approval=true, code=<auth_code>, consent_flow=web_consent
-  // "code" di sini bukan OAuth code — ini authorization_code dari response body twitter authorize
-  
-  // Extract auth_code dari response (biasanya di JSON embedded di HTML atau header)
   let authCode = extractAuthCode(twitterAuthRes.data);
   if (!authCode) {
     console.error(`[${index}] Gagal extract auth_code dari Twitter authorize page`);
@@ -136,7 +126,7 @@ async function connectAccount(authToken, ct0, index) {
     {
       headers: {
         ...baseHeaders,
-        'Authorization': `Bearer AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA`, // Twitter public bearer
+        'Authorization': `Bearer AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA`,
         'Cookie': `auth_token=${authToken}; ct0=${ct0}`,
         'Content-Type': 'application/x-www-form-urlencoded',
         'X-Csrf-Token': ct0,
@@ -154,7 +144,6 @@ async function connectAccount(authToken, ct0, index) {
     return null;
   }
 
-  // Response berisi redirect_uri dengan code
   const approveData = approveRes.data;
   console.log(`[${index}] Approve response:`, JSON.stringify(approveData).slice(0, 200));
 
@@ -164,7 +153,6 @@ async function connectAccount(authToken, ct0, index) {
     return null;
   }
 
-  // ── Step 4: GET arction.app/oauth/x_callback?state=...&code=... ──
   console.log(`[${index}] Step 4: GET Arction callback...`);
   const callbackRes = await client.get(callbackUrl, {
     headers: {
@@ -176,12 +164,10 @@ async function connectAccount(authToken, ct0, index) {
     },
   });
 
-  // Seharusnya 302 → /dashboard
   const finalLocation = callbackRes.headers['location'];
   console.log(`[${index}] Callback status: ${callbackRes.status}, Location: ${finalLocation}`);
 
   if (callbackRes.status === 302 && finalLocation === '/dashboard') {
-    // Ambil cn_session cookie
     const cookies = await jar.getCookies('https://arction.app');
     const cnSession = cookies.find(c => c.key === 'cn_session');
     if (cnSession) {
@@ -196,8 +182,6 @@ async function connectAccount(authToken, ct0, index) {
 
 // ─── Extract twitter internal auth_code dari HTML ─────────────
 function extractAuthCode(html) {
-  // Twitter embed auth_code di HTML dalam berbagai format
-  // Coba beberapa pattern
   const patterns = [
     /"code"\s*:\s*"([^"]+)"/,
     /name="code"\s+value="([^"]+)"/,
@@ -215,7 +199,6 @@ function extractAuthCode(html) {
 async function main() {
   if (!fs.existsSync(ACCOUNTS_FILE)) {
     console.error(`File ${ACCOUNTS_FILE} tidak ditemukan!`);
-    console.log('Format: satu akun per baris → auth_token|ct0');
     process.exit(1);
   }
 
@@ -224,7 +207,6 @@ async function main() {
     .map(l => l.trim())
     .filter(l => l && !l.startsWith('#'));
 
-  // Pasangkan baris: authtoken, ct0, authtoken, ct0, ...
   const accounts = [];
   for (let i = 0; i < lines.length; i += 2) {
     if (lines[i] && lines[i + 1]) {
@@ -232,24 +214,59 @@ async function main() {
     }
   }
 
-  const results = [];
-  for (let i = 0; i < accounts.length; i++) {
-    const { authToken, ct0 } = accounts[i];
-    if (!authToken || !ct0) {
-      console.warn(`[${i + 1}] Format salah, skip`);
-      continue;
+  console.log(`Total akun terbaca: ${accounts.length}`);
+  console.log('');
+  console.log('Pilih mode:');
+  console.log('  1 → Jalankan 1 akun (pilih nomor)');
+  console.log('  2 → Semua akun');
+  console.log('  3 → Dari akun ke-X sampai akhir');
+  console.log('');
+
+  const mode = await prompt('Mode [1/2/3]: ');
+
+  let selected = [];
+
+  if (mode === '1') {
+    const input = await prompt(`Nomor akun (1–${accounts.length}): `);
+    const n = parseInt(input);
+    if (isNaN(n) || n < 1 || n > accounts.length) {
+      console.error('Nomor tidak valid, keluar.');
+      process.exit(1);
     }
-    try {
-      const res = await connectAccount(authToken.trim(), ct0.trim(), i + 1);
-      if (res) results.push(res);
-    } catch (err) {
-      console.error(`[${i + 1}] Error:`, err.message);
+    selected = [{ ...accounts[n - 1], displayIndex: n }];
+
+  } else if (mode === '2') {
+    selected = accounts.map((a, i) => ({ ...a, displayIndex: i + 1 }));
+
+  } else if (mode === '3') {
+    const input = await prompt(`Mulai dari akun ke- (1–${accounts.length}): `);
+    const from = parseInt(input);
+    if (isNaN(from) || from < 1 || from > accounts.length) {
+      console.error('Nomor tidak valid, keluar.');
+      process.exit(1);
     }
-    // Delay antar akun
-    if (i < accounts.length - 1) await sleep(2000 + Math.random() * 1000);
+    selected = accounts.slice(from - 1).map((a, i) => ({ ...a, displayIndex: from + i }));
+
+  } else {
+    console.error('Pilihan tidak valid, keluar.');
+    process.exit(1);
   }
 
-  console.log(`\n=== SELESAI: ${results.length}/${accounts.length} akun berhasil connect ===`);
+  console.log(`\nMenjalankan ${selected.length} akun...\n`);
+
+  const results = [];
+  for (let i = 0; i < selected.length; i++) {
+    const { authToken, ct0, displayIndex } = selected[i];
+    try {
+      const res = await connectAccount(authToken.trim(), ct0.trim(), displayIndex);
+      if (res) results.push(res);
+    } catch (err) {
+      console.error(`[${displayIndex}] Error:`, err.message);
+    }
+    if (i < selected.length - 1) await sleep(2000 + Math.random() * 1000);
+  }
+
+  console.log(`\n=== SELESAI: ${results.length}/${selected.length} akun berhasil connect ===`);
   fs.writeFileSync('arction_sessions.json', JSON.stringify(results, null, 2));
   console.log('Session disimpan ke arction_sessions.json');
 }
