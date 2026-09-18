@@ -65,6 +65,17 @@ function request({ method = 'GET', url, headers = {}, body = null, followRedirec
           const nextMethod = (res.statusCode === 303 || ([301, 302].includes(res.statusCode) && currentMethod !== 'GET'))
             ? 'GET' : currentMethod;
           const nextBody = nextMethod === 'GET' ? null : currentBody;
+          // Update Cookie header dengan cookies baru dari hop ini
+          const newCookies = parseCookies([].concat(res.headers['set-cookie'] || []));
+          if (Object.keys(newCookies).length > 0) {
+            const existing = {};
+            for (const part of (headers['Cookie'] || '').split(';')) {
+              const [k, ...v] = part.trim().split('=');
+              if (k) existing[k.trim()] = v.join('=').trim();
+            }
+            const merged = { ...existing, ...newCookies };
+            headers['Cookie'] = Object.entries(merged).map(([k, v]) => `${k}=${v}`).join('; ');
+          }
           // Baca dan buang body response sebelum redirect
           res.resume();
           doRequest(nextUrl, nextMethod, nextBody);
@@ -179,7 +190,7 @@ async function connectAccount(authToken, ct0, index) {
   const postBody = new URLSearchParams({ approval: 'true', code: authCode, consent_flow: 'web_consent' }).toString();
   const approveRes = await request({
     method: 'POST',
-    url: 'https://api.x.com/2/oauth2/authorize',
+    url: 'https://x.com/i/api/2/oauth2/authorize',
     headers: {
       ...baseHeaders,
       'Authorization': 'Bearer AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I7BeIg1n0AH8%3DUkinIHmidszmwwXYFERnJpM3giqwFZszY0jokXT7uY',
