@@ -159,6 +159,14 @@ async function connectAccount(authToken, ct0, index) {
     return null;
   }
 
+  // DEBUG — hapus setelah auth_code ketemu
+  console.log(`[${index}] Twitter authorize status: ${twitterAuthRes.status}`);
+  const htmlSnippet = twitterAuthRes.data.slice(0, 2000);
+  console.log(`[${index}] HTML snippet:\n${htmlSnippet}\n---`);
+  // Coba cari pola lain yang mungkin ada di response
+  const codeMatch = twitterAuthRes.data.match(/["\s]code["\s]?\s*[=:]\s*["']?([A-Za-z0-9_\-]{20,})/g);
+  console.log(`[${index}] Semua match 'code':`, codeMatch?.slice(0, 5));
+
   const authCode = extractAuthCode(twitterAuthRes.data);
   if (!authCode) {
     console.error(`[${index}] Gagal extract auth_code dari Twitter authorize page`);
